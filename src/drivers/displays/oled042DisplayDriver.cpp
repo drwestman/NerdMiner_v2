@@ -136,7 +136,12 @@ void oledDisplay_AnimateCurrentScreen(unsigned long frame)
 {
 }
 
-CyclicScreenFunction oledDisplayCyclicScreens[] = {oledDisplay_Screen1, oledDisplay_Screen2};
+void oledDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction oledDisplayCyclicScreens[] = {oledDisplay_Screen1, oledDisplay_Screen2, oledDisplay_BlankScreen};
 
 DisplayDriver oled042DisplayDriver = {
     oledDisplay_Init,

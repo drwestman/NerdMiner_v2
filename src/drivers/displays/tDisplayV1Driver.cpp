@@ -253,7 +253,12 @@ void tDisplay_DoLedStuff(unsigned long frame)
 {
 }
 
-CyclicScreenFunction tDisplayCyclicScreens[] = {tDisplay_MinerScreen, tDisplay_ClockScreen, tDisplay_GlobalHashScreen, tDisplay_BTCprice};
+void tDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction tDisplayCyclicScreens[] = {tDisplay_MinerScreen, tDisplay_ClockScreen, tDisplay_GlobalHashScreen, tDisplay_BTCprice, tDisplay_BlankScreen};
 
 DisplayDriver tDisplayV1Driver = {
     tDisplay_Init,

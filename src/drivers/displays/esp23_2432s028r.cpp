@@ -595,11 +595,16 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
     }
     break;
   }
-  
+
 
 }
 
-CyclicScreenFunction esp32_2432S028RCyclicScreens[] = {esp32_2432S028R_MinerScreen, esp32_2432S028R_ClockScreen, esp32_2432S028R_GlobalHashScreen, esp32_2432S028R_BTCprice};
+void esp32_2432S028R_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction esp32_2432S028RCyclicScreens[] = {esp32_2432S028R_MinerScreen, esp32_2432S028R_ClockScreen, esp32_2432S028R_GlobalHashScreen, esp32_2432S028R_BTCprice, esp32_2432S028R_BlankScreen};
 
 DisplayDriver esp32_2432S028RDriver = {
     esp32_2432S028R_Init,
