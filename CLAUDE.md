@@ -286,7 +286,7 @@ No automated test suite exists. Testing is manual:
   - `src/drivers/displays/display.cpp` - Updated `switchToNextScreen()` function
   - 11 display driver files - Added blank screen function and updated cyclic arrays
     - `amoledDisplayDriver.cpp`, `tDisplayDriver.cpp`, `tDisplayV1Driver.cpp`
-    - `dongleDisplayDriver.cpp`, `esp23_2432s028r.cpp`, `t_qtDisplayDriver.cpp`
+    - `dongleDisplayDriver.cpp`, `esp32_2432s028r.cpp`, `t_qtDisplayDriver.cpp`
     - `t_hmiDisplayDriver.cpp`, `oled042DisplayDriver.cpp`, `sp_kcDisplayDriver.cpp`
     - `m5stickCDriver.cpp`, `m5stickCPlusDriver.cpp`
 
