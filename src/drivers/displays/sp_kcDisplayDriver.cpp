@@ -163,7 +163,12 @@ void sp_kcDisplay_DoLedStuff(unsigned long frame)
 {
 }
 
-CyclicScreenFunction sp_kcDisplayCyclicScreens[] = {sp_kcDisplay_MinerScreen, sp_kcDisplay_ClockScreen};
+void sp_kcDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction sp_kcDisplayCyclicScreens[] = {sp_kcDisplay_MinerScreen, sp_kcDisplay_ClockScreen, sp_kcDisplay_BlankScreen};
 
 DisplayDriver sp_kcDisplayDriver = {
     sp_kcDisplay_Init,

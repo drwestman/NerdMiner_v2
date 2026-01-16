@@ -163,7 +163,12 @@ void t_qtDisplay_DoLedStuff(unsigned long frame)
 {
 }
 
-CyclicScreenFunction t_qtDisplayCyclicScreens[] = {t_qtDisplay_MinerScreen, t_qtDisplay_ClockScreen};
+void t_qtDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction t_qtDisplayCyclicScreens[] = {t_qtDisplay_MinerScreen, t_qtDisplay_ClockScreen, t_qtDisplay_BlankScreen};
 
 DisplayDriver t_qtDisplayDriver = {
     t_qtDisplay_Init,

@@ -226,7 +226,12 @@ void dongleDisplay_DoLedStuff(unsigned long frame)
 #endif
 }
 
-CyclicScreenFunction dongleDisplayCyclicScreens[] = {dongleDisplay_MinerScreen};
+void dongleDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction dongleDisplayCyclicScreens[] = {dongleDisplay_MinerScreen, dongleDisplay_BlankScreen};
 
 DisplayDriver dongleDisplayDriver = {
     dongleDisplay_Init,

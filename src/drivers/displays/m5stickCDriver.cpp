@@ -183,7 +183,12 @@ void m5stickCDriver_DoLedStuff(unsigned long frame)
 {
 }
 
-CyclicScreenFunction m5stickCDriverCyclicScreens[] = { m5stickCDriver_MinerScreen,m5stickCDriver_ClockScreen,m5stickCDriver_GlobalHashScreen};
+void m5stickCDriver_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction m5stickCDriverCyclicScreens[] = { m5stickCDriver_MinerScreen, m5stickCDriver_ClockScreen, m5stickCDriver_GlobalHashScreen, m5stickCDriver_BlankScreen };
 
 DisplayDriver m5stickCDriver = {
     m5stickCDriver_Init,

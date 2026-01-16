@@ -390,7 +390,12 @@ void t_hmiDisplay_DoLedStuff(unsigned long frame)
 {
 }
 
-CyclicScreenFunction t_hmiDisplayCyclicScreens[] = {t_hmiDisplay_MinerScreen, t_hmiDisplay_ClockScreen, t_hmiDisplay_GlobalHashScreen, t_hmiDisplay_BTCprice};
+void t_hmiDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction t_hmiDisplayCyclicScreens[] = {t_hmiDisplay_MinerScreen, t_hmiDisplay_ClockScreen, t_hmiDisplay_GlobalHashScreen, t_hmiDisplay_BTCprice, t_hmiDisplay_BlankScreen};
 
 DisplayDriver t_hmiDisplayDriver = {
     t_hmiDisplay_Init,

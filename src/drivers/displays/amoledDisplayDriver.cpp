@@ -234,7 +234,12 @@ void amoledDisplay_DoLedStuff(unsigned long frame)
 {
 }
 
-CyclicScreenFunction amoledDisplayCyclicScreens[] = {amoledDisplay_MinerScreen, amoledDisplay_ClockScreen, amoledDisplay_GlobalHashScreen};
+void amoledDisplay_BlankScreen(unsigned long mElapsed)
+{
+  // Blank screen - do nothing, display is turned off by alternateScreenState
+}
+
+CyclicScreenFunction amoledDisplayCyclicScreens[] = {amoledDisplay_MinerScreen, amoledDisplay_ClockScreen, amoledDisplay_GlobalHashScreen, amoledDisplay_BlankScreen};
 
 DisplayDriver amoledDisplayDriver = {
     amoledDisplay_Init,

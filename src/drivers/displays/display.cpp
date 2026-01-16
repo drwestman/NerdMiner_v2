@@ -104,7 +104,25 @@ void resetToFirstScreen()
 // Switches to the next cyclic screen without drawing it
 void switchToNextScreen()
 {
-  currentDisplayDriver->current_cyclic_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
+  int next_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
+  int last_screen = currentDisplayDriver->num_cyclic_screens - 1;
+
+  // If we're currently on the blank screen (last screen), turn display on and go to first screen
+  if (currentDisplayDriver->current_cyclic_screen == last_screen) {
+    currentDisplayDriver->alternateScreenState(); // Turn display back on
+    currentDisplayDriver->current_cyclic_screen = 0;
+    return;
+  }
+
+  // If we're switching to the blank screen (last screen), turn display off
+  if (next_screen == last_screen) {
+    currentDisplayDriver->current_cyclic_screen = next_screen;
+    currentDisplayDriver->alternateScreenState(); // Turn display off
+    return;
+  }
+
+  // Normal screen cycling
+  currentDisplayDriver->current_cyclic_screen = next_screen;
 }
 
 // Draw the current cyclic screen
