@@ -43,6 +43,15 @@ global_data gData;
 pool_data pData;
 String poolAPIUrl;
 
+// Update timers for HTTP data refresh intervals
+unsigned long mGlobalUpdate = 0;
+unsigned long mHeightUpdate = 0;
+unsigned long mBTCUpdate = 0;
+unsigned long mTriggerUpdate = 0;
+unsigned long mPoolUpdate = 0;
+unsigned long initialMillis = millis();
+unsigned long initialTime = 0;
+
 // ===== Async HTTP Client Infrastructure =====
 
 // Request types for async HTTP fetcher
@@ -83,19 +92,28 @@ void processGlobalDataResponse(const String& payload) {
     
     xSemaphoreTake(httpDataMutex, portMAX_DELAY);
     
-    String temp = "";
-    if (doc.containsKey("currentHashrate")) temp = String(doc["currentHashrate"].as<float>());
-    if(temp.length()>18 + 3) //Exahashes more than 18 digits + 3 digits decimals
-        gData.globalHash = temp.substring(0,temp.length()-18 - 3);
+    // Use double for better precision with large numbers, avoid fragile string manipulation
+    if (doc.containsKey("currentHashrate")) {
+        double hashrate = doc["currentHashrate"].as<double>();
+        // An exahash is 1e18
+        long exahashes = round(hashrate / 1.0e18);
+        gData.globalHash = String(exahashes);
+    }
     
-    if (doc.containsKey("currentDifficulty")) temp = String(doc["currentDifficulty"].as<float>());
-    if(temp.length()>10 + 3){ //Terahash more than 10 digits + 3 digit decimals
-        temp = temp.substring(0,temp.length()-10 - 3);
-        gData.difficulty = temp.substring(0,temp.length()-2) + "." + temp.substring(temp.length()-2,temp.length()) + "T";
+    if (doc.containsKey("currentDifficulty")) {
+        double difficulty = doc["currentDifficulty"].as<double>();
+        // A terahash is 1e12
+        double terahashes = difficulty / 1.0e12;
+        char difficultyStr[16];
+        snprintf(difficultyStr, sizeof(difficultyStr), "%.2fT", terahashes);
+        gData.difficulty = String(difficultyStr);
     }
     
     xSemaphoreGive(httpDataMutex);
     doc.clear();
+    
+    // Update timer only on successful processing (Issue #2: Timing bug fix)
+    mGlobalUpdate = millis();
 }
 
 void processFeesResponse(const String& payload) {
@@ -118,6 +136,9 @@ void processFeesResponse(const String& payload) {
     
     xSemaphoreGive(httpDataMutex);
     doc.clear();
+    
+    // Update timer only on successful processing (Issue #2: Timing bug fix)
+    mGlobalUpdate = millis();
 }
 
 void processBlockHeightResponse(const String& payload) {
@@ -127,6 +148,9 @@ void processBlockHeightResponse(const String& payload) {
     xSemaphoreTake(httpDataMutex, portMAX_DELAY);
     current_block = trimmed;
     xSemaphoreGive(httpDataMutex);
+    
+    // Update timer only on successful processing (Issue #2: Timing bug fix)
+    mHeightUpdate = millis();
 }
 
 void processBTCPriceResponse(const String& payload) {
@@ -145,6 +169,9 @@ void processBTCPriceResponse(const String& payload) {
     
     xSemaphoreGive(httpDataMutex);
     doc.clear();
+    
+    // Update timer only on successful processing (Issue #2: Timing bug fix)
+    mBTCUpdate = millis();
 }
 
 void processPoolDataResponse(const String& payload) {
@@ -204,6 +231,9 @@ void processPoolDataResponse(const String& payload) {
     doc.clear();
     
     Serial.println("####### Pool Data processed (async)");
+    
+    // Update timer only on successful processing (Issue #2: Timing bug fix)
+    mPoolUpdate = millis();
 }
 
 // ===== Async HTTP Fetcher Task =====
@@ -355,7 +385,6 @@ void setup_monitor(void){
     Serial.println("Async HTTP infrastructure initialized successfully");
 }
 
-unsigned long mGlobalUpdate =0;
 
 void updateGlobalData(void){
     
@@ -367,56 +396,64 @@ void updateGlobalData(void){
         queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getGlobalHash);
         queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getFees);
         
-        mGlobalUpdate = millis();
+        // Timer updated by response processors on success (Issue #2: Timing bug fix)
     }
 }
 
-unsigned long mHeightUpdate = 0;
 
 String getBlockHeight(void){
     
     if((mHeightUpdate == 0) || (millis() - mHeightUpdate > UPDATE_Height_min * 60 * 1000)){
     
-        if (WiFi.status() != WL_CONNECTED) return current_block;
+        if (WiFi.status() != WL_CONNECTED) {
+            // Return cached value with mutex protection (Issue #1: Race condition fix)
+            xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+            String result = current_block;
+            xSemaphoreGive(httpDataMutex);
+            return result;
+        }
         
         // Queue async HTTP request for block height
         queueHttpRequest(HTTP_REQ_BLOCK_HEIGHT, getHeightAPI);
         
-        mHeightUpdate = millis();
+        // Timer updated by response processor on success (Issue #2: Timing bug fix)
     }
   
-    // Return current cached value (will be updated asynchronously)
-    return current_block;
+    // Return current cached value with mutex protection (Issue #1: Race condition fix)
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    String result = current_block;
+    xSemaphoreGive(httpDataMutex);
+    return result;
 }
 
-unsigned long mBTCUpdate = 0;
 
 String getBTCprice(void){
     
     if((mBTCUpdate == 0) || (millis() - mBTCUpdate > UPDATE_BTC_min * 60 * 1000)){
     
         if (WiFi.status() != WL_CONNECTED) {
+            // Return cached value with mutex protection (Issue #1: Race condition fix)
+            xSemaphoreTake(httpDataMutex, portMAX_DELAY);
             static char price_buffer[16];
             snprintf(price_buffer, sizeof(price_buffer), "$%u", bitcoin_price);
+            xSemaphoreGive(httpDataMutex);
             return String(price_buffer);
         }
         
         // Queue async HTTP request for BTC price
         queueHttpRequest(HTTP_REQ_BTC_PRICE, getBTCAPI);
         
-        mBTCUpdate = millis();
+        // Timer updated by response processor on success (Issue #2: Timing bug fix)
     }  
   
-    // Return current cached value (will be updated asynchronously)
+    // Return current cached value with mutex protection (Issue #1: Race condition fix)
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
     static char price_buffer[16];
     snprintf(price_buffer, sizeof(price_buffer), "$%u", bitcoin_price);
+    xSemaphoreGive(httpDataMutex);
     return String(price_buffer);
 }
 
-unsigned long mTriggerUpdate = 0;
-unsigned long initialMillis = millis();
-unsigned long initialTime = 0;
-unsigned long mPoolUpdate = 0;
 
 void getTime(unsigned long* currentHours, unsigned long* currentMinutes, unsigned long* currentSeconds){
   
@@ -653,7 +690,13 @@ String getPoolAPIUrl(void) {
 pool_data getPoolData(void){
     //pool_data pData;    
     if((mPoolUpdate == 0) || (millis() - mPoolUpdate > UPDATE_POOL_min * 60 * 1000)){      
-        if (WiFi.status() != WL_CONNECTED) return pData;
+        if (WiFi.status() != WL_CONNECTED) {
+            // Return cached value with mutex protection (Issue #1: Race condition fix)
+            xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+            pool_data result = pData;
+            xSemaphoreGive(httpDataMutex);
+            return result;
+        }
         
         // Construct pool API URL with wallet address
         String btcWallet = Settings.BtcWallet;
@@ -673,9 +716,12 @@ pool_data getPoolData(void){
         bool queued = queueHttpRequest(HTTP_REQ_POOL_DATA, poolUrl);
         Serial.println("Pool data request queued: " + String(queued ? "YES" : "NO"));
         
-        mPoolUpdate = millis();
+        // Timer updated by response processor on success (Issue #2: Timing bug fix)
     }
     
-    // Return current cached value (will be updated asynchronously)
-    return pData;
+    // Return current cached value with mutex protection (Issue #1: Race condition fix)
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    pool_data result = pData;
+    xSemaphoreGive(httpDataMutex);
+    return result;
 }
