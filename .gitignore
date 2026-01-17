@@ -10,3 +10,5 @@ logs
 boards/ESP32_wroom_guide.md
 backups/
 firmware/
+temp/
+
