@@ -75,6 +75,10 @@ static uint8_t lastActiveScreen = 0;
 bool isScreensaverActive = false;  // Exposed via header
 static SemaphoreHandle_t screensaverMutex = NULL;
 
+// Phase 1.2 Optimization: Screen switch debouncing
+static unsigned long lastScreenSwitchTime = 0;
+#define SCREEN_SWITCH_DEBOUNCE_MS 300
+
 // Initialize the display
 void initDisplay()
 {
@@ -135,6 +139,14 @@ void resetToFirstScreen()
 // Switches to the next cyclic screen without drawing it
 void switchToNextScreen()
 {
+  // Phase 1.2 Optimization: Debounce rapid button presses
+  unsigned long now = millis();
+  if (now - lastScreenSwitchTime < SCREEN_SWITCH_DEBOUNCE_MS) {
+    Serial.println("[DISPLAY] Screen switch debounced (too soon)");
+    return; // Ignore rapid button presses
+  }
+  lastScreenSwitchTime = now;
+
   // If screensaver is active, wake from screensaver instead of cycling
   if (isScreensaverActive) {
     wakeFromScreensaver();
@@ -145,6 +157,14 @@ void switchToNextScreen()
 
   // Normal screen cycling
   currentDisplayDriver->current_cyclic_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
+  
+  // Phase 1.3 Optimization: Set hasChangedScreen flag here
+  #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+  extern bool hasChangedScreen;
+  hasChangedScreen = true;
+  #endif
+  
+  Serial.printf("[DISPLAY] Switched to screen %d\n", currentDisplayDriver->current_cyclic_screen);
 }
 
 // Draw the current cyclic screen

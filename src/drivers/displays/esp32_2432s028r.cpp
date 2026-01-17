@@ -153,7 +153,9 @@ bool createBackgroundSprite(int16_t wdt, int16_t hgt){  // Set the background an
 extern unsigned long mPoolUpdate;
 
 void printPoolData(){
-  if ((hasChangedScreen) || (mPoolUpdate == 0) || (millis() - mPoolUpdate > UPDATE_POOL_min * 60 * 1000)){     
+  // Phase 1.1 Optimization: Remove hasChangedScreen trigger - only refresh based on timer
+  // This prevents expensive HTTP API calls on every screen switch
+  if ((mPoolUpdate == 0) || (millis() - mPoolUpdate > UPDATE_POOL_min * 60 * 1000)){     
       if (Settings.PoolAddress != "tn.vkbit.com") { 
           pData = getPoolData();             
           background.createSprite(320,50); //Background Sprite
@@ -552,6 +554,7 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
           updateActivityTime();
 
           if (((t_x > 109)&&(t_x < 211)) && ((t_y > 185)&&(t_y < 241))) {
+            // Phase 1.3: Toggle pool screen color
             bottomScreenBlue ^= true;
             hasChangedScreen = true;
           } else if((t_x > 235) && ((t_y > 0)&&(t_y < 16))) {
@@ -561,23 +564,26 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
           }
           else
             if (t_x > 160) {
+              // Phase 1.3: Use debounced screen switching via switchToNextScreen()
               // next screen
-             // Serial.printf("Next screen touch( x:%d y:%d )\n", t_x, t_y);              
-              currentDisplayDriver->current_cyclic_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
+              switchToNextScreen();
             } else if (t_x < 160)
             {
-              // Previus screen
-             // Serial.printf("Previus screen touch( x:%d y:%d )\n", t_x, t_y);              
-              /* Serial.println(currentDisplayDriver->current_cyclic_screen); */
+              // Phase 1.3: Previous screen with hasChangedScreen flag
+              // Previus screen         
               currentDisplayDriver->current_cyclic_screen = currentDisplayDriver->current_cyclic_screen - 1;      
-              if (currentDisplayDriver->current_cyclic_screen<0) currentDisplayDriver->current_cyclic_screen = currentDisplayDriver->num_cyclic_screens - 1;              
+              if (currentDisplayDriver->current_cyclic_screen<0) currentDisplayDriver->current_cyclic_screen = currentDisplayDriver->num_cyclic_screens - 1;
+              hasChangedScreen = true;
             }
       }
       previousTouchMillis = currentMillis;
     }
 
-    if (currentScreen != currentDisplayDriver->current_cyclic_screen) hasChangedScreen ^= true;
-    currentScreen = currentDisplayDriver->current_cyclic_screen;
+  // Phase 1.3: Removed redundant hasChangedScreen toggle
+  // The flag is now set explicitly in switchToNextScreen() and touch handlers
+  // This line: if (currentScreen != currentDisplayDriver->current_cyclic_screen) hasChangedScreen ^= true;
+  // was causing unnecessary full screen redraws
+  currentScreen = currentDisplayDriver->current_cyclic_screen;
 
   switch (mMonitor.NerdStatus)
   {
