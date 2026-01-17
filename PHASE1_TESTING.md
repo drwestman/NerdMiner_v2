@@ -24,7 +24,8 @@
 ### 1. Flash the Firmware
 
 ```bash
-cd /home/david/NerdMiner_v2
+# Navigate to your NerdMiner project directory
+cd /path/to/NerdMiner_v2
 pio run -e ESP32-2432S028R -t upload
 ```
 
@@ -192,14 +193,18 @@ Record these metrics AFTER Phase 1:
 If Phase 1 causes issues:
 
 ```bash
-cd /home/david/NerdMiner_v2
+# Navigate to your project directory
+cd /path/to/NerdMiner_v2
+
+# Option 1: Revert to main branch
 git checkout main
 pio run -e ESP32-2432S028R -t upload
 ```
 
 Or revert specific commits:
 ```bash
-git revert c18ae9e
+# Use the actual commit hash from your git history
+git revert <commit-hash>
 ```
 
 ---
@@ -208,8 +213,10 @@ git revert c18ae9e
 
 If Phase 1 testing is successful:
 - [ ] Document actual performance gains
-- [ ] Proceed to Phase 2 (Async HTTP)
-- [ ] Consider Phase 2 (Double Buffering)
+- [ ] Proceed to Phase 2 optimizations:
+  - [ ] 2.1: Async HTTP for non-blocking API calls
+  - [ ] 2.2: Double buffering for faster rendering
+  - [ ] 2.3: Partial screen updates (optional)
 
 If issues found:
 - [ ] Document issues in GitHub issue

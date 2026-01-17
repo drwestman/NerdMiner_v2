@@ -75,7 +75,7 @@ flowchart TD
     
     SubSuccess -->|Yes| Authorize[STEP 2: mining.authorize<br/>Send wallet & password]
     Authorize --> SuggestDiff[STEP 3: mining.set_difficulty<br/>Suggest difficulty]
-    SuggestDiff --> SetSubscribed[Set isMinerSuscribed = true<br/>Record timestamp]
+    SuggestDiff --> SetSubscribed[Set isMinerSubscribed = true<br/>Record timestamp]
     SetSubscribed --> CheckSub
     
     CheckSub -->|Yes| CheckInactivity{Pool<br/>Inactive?}
