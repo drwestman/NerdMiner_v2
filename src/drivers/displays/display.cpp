@@ -159,6 +159,46 @@ void switchToNextScreen()
   currentDisplayDriver->current_cyclic_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
   
   // Phase 1.3 Optimization: Set hasChangedScreen flag here
+  // PR Review Note: This flag is ESP32-2432S028R specific for controlling full screen redraws.
+  // Other display drivers may handle screen changes differently.
+  // See esp32_2432s028r.cpp for usage of hasChangedScreen flag.
+  #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+  extern bool hasChangedScreen;
+  hasChangedScreen = true;
+  #endif
+  
+  Serial.printf("[DISPLAY] Switched to screen %d\n", currentDisplayDriver->current_cyclic_screen);
+}
+
+// Switches to the previous cyclic screen without drawing it
+void switchToPreviousScreen()
+{
+  // PR Review Fix: Added debouncing for previous screen to match next screen behavior
+  unsigned long now = millis();
+  if (now - lastScreenSwitchTime < SCREEN_SWITCH_DEBOUNCE_MS) {
+    Serial.println("[DISPLAY] Screen switch debounced (too soon)");
+    return; // Ignore rapid button presses
+  }
+  lastScreenSwitchTime = now;
+
+  // If screensaver is active, wake from screensaver instead of cycling
+  if (isScreensaverActive) {
+    wakeFromScreensaver();
+    return;
+  }
+
+  updateActivityTime();
+
+  // Cycle to the previous screen
+  if (currentDisplayDriver->current_cyclic_screen == 0) {
+    currentDisplayDriver->current_cyclic_screen = currentDisplayDriver->num_cyclic_screens - 1;
+  } else {
+    currentDisplayDriver->current_cyclic_screen--;
+  }
+  
+  // Set flag for redraw (consistent with switchToNextScreen)
+  // PR Review Note: This flag is ESP32-2432S028R specific for controlling full screen redraws.
+  // Other display drivers may handle screen changes differently.
   #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
   extern bool hasChangedScreen;
   hasChangedScreen = true;

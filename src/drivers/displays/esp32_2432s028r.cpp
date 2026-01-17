@@ -569,11 +569,9 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
               switchToNextScreen();
             } else if (t_x < 160)
             {
-              // Phase 1.3: Previous screen with hasChangedScreen flag
-              // Previus screen         
-              currentDisplayDriver->current_cyclic_screen = currentDisplayDriver->current_cyclic_screen - 1;      
-              if (currentDisplayDriver->current_cyclic_screen<0) currentDisplayDriver->current_cyclic_screen = currentDisplayDriver->num_cyclic_screens - 1;
-              hasChangedScreen = true;
+              // PR Review Fix: Use debounced switchToPreviousScreen() for consistency
+              // Previous screen
+              switchToPreviousScreen();
             }
       }
       previousTouchMillis = currentMillis;
