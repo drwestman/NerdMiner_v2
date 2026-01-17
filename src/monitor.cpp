@@ -54,9 +54,11 @@ enum HttpRequestType {
 };
 
 // HTTP request structure
+// NOTE: Using char array instead of String for FreeRTOS queue compatibility
+// String objects contain pointers that become invalid after queueing
 struct HttpRequest {
     HttpRequestType type;
-    String url;
+    char url[256];  // Fixed-size buffer for URL
     unsigned long timestamp;
 };
 
@@ -155,13 +157,27 @@ void processPoolDataResponse(const String& payload) {
     StaticJsonDocument<2048> doc;
     DeserializationError error = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
     if (error) {
-        Serial.println("Pool data JSON parse error");
+        Serial.println("Pool data JSON parse error: " + String(error.c_str()));
+        Serial.println("Payload length: " + String(payload.length()));
+        Serial.println("First 200 chars: " + payload.substring(0, min(200, (int)payload.length())));
+        
+        // Set error state
+        xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+        pData.bestDifficulty = "Parse Error";
+        pData.workersHash = "E";
+        pData.workersCount = 0;
+        xSemaphoreGive(httpDataMutex);
         return;
     }
     
     xSemaphoreTake(httpDataMutex, portMAX_DELAY);
     
-    if (doc.containsKey("workersCount")) pData.workersCount = doc["workersCount"].as<int>();
+    if (doc.containsKey("workersCount")) {
+        pData.workersCount = doc["workersCount"].as<int>();
+        Serial.println("Workers count: " + String(pData.workersCount));
+    } else {
+        Serial.println("WARNING: workersCount not in response");
+    }
     
     const JsonArray& workers = doc["workers"].as<JsonArray>();
     float totalhashs = 0;
@@ -172,12 +188,16 @@ void processPoolDataResponse(const String& payload) {
     char totalhashs_s[16] = {0};
     suffix_string(totalhashs, totalhashs_s, 16, 0);
     pData.workersHash = String(totalhashs_s);
+    Serial.println("Workers hash: " + pData.workersHash);
     
     if (doc.containsKey("bestDifficulty")) {
         double temp = doc["bestDifficulty"].as<double>();
         char best_diff_string[16] = {0};
         suffix_string(temp, best_diff_string, 16, 0);
         pData.bestDifficulty = String(best_diff_string);
+        Serial.println("Best difficulty: " + pData.bestDifficulty);
+    } else {
+        Serial.println("WARNING: bestDifficulty not in response");
     }
     
     xSemaphoreGive(httpDataMutex);
@@ -198,6 +218,8 @@ void httpFetcherTaskHandler(void* param) {
         // Wait for HTTP request from queue (blocking)
         if (xQueueReceive(httpRequestQueue, &req, portMAX_DELAY) == pdTRUE) {
             
+            Serial.println("Processing HTTP request type: " + String(req.type) + " URL: " + String(req.url));
+            
             // Check WiFi connectivity
             if (WiFi.status() != WL_CONNECTED) {
                 Serial.println("HTTP request skipped: No WiFi");
@@ -210,15 +232,18 @@ void httpFetcherTaskHandler(void* param) {
             
             int httpCode = http.GET();
             
+            Serial.println("HTTP response code: " + String(httpCode));
+            
             if (httpCode == HTTP_CODE_OK) {
                 String payload = http.getString();
+                Serial.println("Payload received, length: " + String(payload.length()));
                 
                 // Process response based on request type
                 switch (req.type) {
                     case HTTP_REQ_GLOBAL_DATA:
-                        if (req.url == getGlobalHash) {
+                        if (strcmp(req.url, getGlobalHash) == 0) {
                             processGlobalDataResponse(payload);
-                        } else if (req.url == getFees) {
+                        } else if (strcmp(req.url, getFees) == 0) {
                             processFeesResponse(payload);
                         }
                         break;
@@ -232,12 +257,22 @@ void httpFetcherTaskHandler(void* param) {
                         break;
                         
                     case HTTP_REQ_POOL_DATA:
+                        Serial.println("Processing pool data...");
                         processPoolDataResponse(payload);
                         break;
                 }
                 
             } else {
                 Serial.printf("HTTP request failed: %d (type: %d)\n", httpCode, req.type);
+                
+                // Handle pool data errors specifically
+                if (req.type == HTTP_REQ_POOL_DATA) {
+                    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+                    pData.bestDifficulty = "HTTP Err";
+                    pData.workersHash = "E";
+                    pData.workersCount = 0;
+                    xSemaphoreGive(httpDataMutex);
+                }
             }
             
             http.end();
@@ -253,7 +288,11 @@ void httpFetcherTaskHandler(void* param) {
 bool queueHttpRequest(HttpRequestType type, const String& url) {
     HttpRequest req;
     req.type = type;
-    req.url = url;
+    
+    // Copy URL to fixed-size buffer (safe for FreeRTOS queue)
+    strncpy(req.url, url.c_str(), sizeof(req.url) - 1);
+    req.url[sizeof(req.url) - 1] = '\0';  // Ensure null termination
+    
     req.timestamp = millis();
     
     // Try to send to queue (non-blocking with 0 timeout)
@@ -626,10 +665,13 @@ pool_data getPoolData(void){
         Serial.println("Pool API : " + poolUrl);
 #else
         poolUrl = String(getPublicPool) + btcWallet;
+        Serial.println("Pool API (default): " + poolUrl);
 #endif
         
         // Queue async HTTP request for pool data
-        queueHttpRequest(HTTP_REQ_POOL_DATA, poolUrl);
+        Serial.println("Queueing pool data request...");
+        bool queued = queueHttpRequest(HTTP_REQ_POOL_DATA, poolUrl);
+        Serial.println("Pool data request queued: " + String(queued ? "YES" : "NO"));
         
         mPoolUpdate = millis();
     }
