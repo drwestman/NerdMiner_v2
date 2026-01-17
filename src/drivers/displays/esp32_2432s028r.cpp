@@ -542,14 +542,14 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
       int16_t t_x , t_y;  // To store the touch coordinates
       bool pressed = touch.getXY(t_x, t_y);
       if (pressed) {
-          updateActivityTime();
-
           // If screensaver is active, wake it and consume this touch event
           if (getScreensaverActive()) {
             wakeFromScreensaver();
             previousTouchMillis = currentMillis;
             return;
           }
+          
+          updateActivityTime();
 
           if (((t_x > 109)&&(t_x < 211)) && ((t_y > 185)&&(t_y < 241))) {
             bottomScreenBlue ^= true;

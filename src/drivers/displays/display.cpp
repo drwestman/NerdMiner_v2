@@ -92,7 +92,6 @@ void initDisplay()
 void alternateScreenState()
 {
   if (isScreensaverActive) {
-    updateActivityTime();
     wakeFromScreensaver();
     return;
   }
@@ -106,7 +105,6 @@ void alternateScreenState()
 void alternateScreenRotation()
 {
   if (isScreensaverActive) {
-    updateActivityTime();
     wakeFromScreensaver();
     return;
   }
@@ -139,7 +137,6 @@ void switchToNextScreen()
 {
   // If screensaver is active, wake from screensaver instead of cycling
   if (isScreensaverActive) {
-    updateActivityTime();
     wakeFromScreensaver();
     return;
   }
@@ -205,7 +202,8 @@ void checkScreensaver()
   // Check if timeout exceeded
   // Note: Unsigned arithmetic handles millis() overflow correctly
   unsigned long currentTime = millis();
-  unsigned long timeoutMs = (unsigned long)Settings.ScreensaverTimeout * 60 * 1000;
+  // Prevent integer overflow: cap timeout to max safe value (ULONG_MAX / 60000)
+  unsigned long timeoutMs = min((unsigned long)Settings.ScreensaverTimeout, ULONG_MAX / 60000UL) * 60000UL;
 
   if (currentTime - lastActivityTime >= timeoutMs) {
     // Activate screensaver

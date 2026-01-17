@@ -180,7 +180,9 @@ NerdMiner includes an automatic screensaver feature that blanks the display afte
 **Configuration:**
 Add to your config.json:
 ```json
-"ScreensaverTimeout": 15
+{
+  "ScreensaverTimeout": 15
+}
 ```
 - Value in minutes (15 = 15 minutes of inactivity)
 - Set to 0 to disable screensaver
