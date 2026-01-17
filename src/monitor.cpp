@@ -111,9 +111,6 @@ void processGlobalDataResponse(const String& payload) {
     
     xSemaphoreGive(httpDataMutex);
     doc.clear();
-    
-    // Update timer only on successful processing (Issue #2: Timing bug fix)
-    mGlobalUpdate = millis();
 }
 
 void processFeesResponse(const String& payload) {
@@ -136,9 +133,6 @@ void processFeesResponse(const String& payload) {
     
     xSemaphoreGive(httpDataMutex);
     doc.clear();
-    
-    // Update timer only on successful processing (Issue #2: Timing bug fix)
-    mGlobalUpdate = millis();
 }
 
 void processBlockHeightResponse(const String& payload) {
@@ -148,9 +142,6 @@ void processBlockHeightResponse(const String& payload) {
     xSemaphoreTake(httpDataMutex, portMAX_DELAY);
     current_block = trimmed;
     xSemaphoreGive(httpDataMutex);
-    
-    // Update timer only on successful processing (Issue #2: Timing bug fix)
-    mHeightUpdate = millis();
 }
 
 void processBTCPriceResponse(const String& payload) {
@@ -169,9 +160,6 @@ void processBTCPriceResponse(const String& payload) {
     
     xSemaphoreGive(httpDataMutex);
     doc.clear();
-    
-    // Update timer only on successful processing (Issue #2: Timing bug fix)
-    mBTCUpdate = millis();
 }
 
 void processPoolDataResponse(const String& payload) {
@@ -231,9 +219,6 @@ void processPoolDataResponse(const String& payload) {
     doc.clear();
     
     Serial.println("####### Pool Data processed (async)");
-    
-    // Update timer only on successful processing (Issue #2: Timing bug fix)
-    mPoolUpdate = millis();
 }
 
 // ===== Async HTTP Fetcher Task =====
@@ -393,10 +378,14 @@ void updateGlobalData(void){
         if (WiFi.status() != WL_CONNECTED) return;
         
         // Queue async HTTP requests for global data
-        queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getGlobalHash);
-        queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getFees);
+        bool queued1 = queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getGlobalHash);
+        bool queued2 = queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getFees);
         
-        // Timer updated by response processors on success (Issue #2: Timing bug fix)
+        // Update timer if at least one request was successfully queued
+        // This prevents retry storm when queue is full
+        if (queued1 || queued2) {
+            mGlobalUpdate = millis();
+        }
     }
 }
 
@@ -414,9 +403,12 @@ String getBlockHeight(void){
         }
         
         // Queue async HTTP request for block height
-        queueHttpRequest(HTTP_REQ_BLOCK_HEIGHT, getHeightAPI);
+        bool queued = queueHttpRequest(HTTP_REQ_BLOCK_HEIGHT, getHeightAPI);
         
-        // Timer updated by response processor on success (Issue #2: Timing bug fix)
+        // Update timer if request was successfully queued to prevent retry storm
+        if (queued) {
+            mHeightUpdate = millis();
+        }
     }
   
     // Return current cached value with mutex protection (Issue #1: Race condition fix)
@@ -441,9 +433,12 @@ String getBTCprice(void){
         }
         
         // Queue async HTTP request for BTC price
-        queueHttpRequest(HTTP_REQ_BTC_PRICE, getBTCAPI);
+        bool queued = queueHttpRequest(HTTP_REQ_BTC_PRICE, getBTCAPI);
         
-        // Timer updated by response processor on success (Issue #2: Timing bug fix)
+        // Update timer if request was successfully queued to prevent retry storm
+        if (queued) {
+            mBTCUpdate = millis();
+        }
     }  
   
     // Return current cached value with mutex protection (Issue #1: Race condition fix)
@@ -716,7 +711,10 @@ pool_data getPoolData(void){
         bool queued = queueHttpRequest(HTTP_REQ_POOL_DATA, poolUrl);
         Serial.println("Pool data request queued: " + String(queued ? "YES" : "NO"));
         
-        // Timer updated by response processor on success (Issue #2: Timing bug fix)
+        // Update timer if request was successfully queued to prevent retry storm
+        if (queued) {
+            mPoolUpdate = millis();
+        }
     }
     
     // Return current cached value with mutex protection (Issue #1: Race condition fix)
