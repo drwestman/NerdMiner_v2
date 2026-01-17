@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include "../storage/storage.h"
 
+// External settings reference
+extern TSettings Settings;
+
 #ifdef NO_DISPLAY
 DisplayDriver *currentDisplayDriver = &noDisplayDriver;
 #endif
@@ -67,13 +70,19 @@ DisplayDriver *currentDisplayDriver = &sp_kcDisplayDriver;
 #endif
 
 // Screensaver state management
-unsigned long lastActivityTime = 0;
-uint8_t lastActiveScreen = 0;
-bool isScreensaverActive = false;
+static unsigned long lastActivityTime = 0;
+static uint8_t lastActiveScreen = 0;
+bool isScreensaverActive = false;  // Exposed via header
+static SemaphoreHandle_t screensaverMutex = NULL;
 
 // Initialize the display
 void initDisplay()
 {
+  // Create mutex for thread-safe access to screensaver state
+  if (screensaverMutex == NULL) {
+    screensaverMutex = xSemaphoreCreateMutex();
+  }
+  
   currentDisplayDriver->initDisplay();
   lastActivityTime = millis();
   isScreensaverActive = false;
@@ -159,36 +168,44 @@ void doLedStuff(unsigned long frame)
   currentDisplayDriver->doLedStuff(frame);
 }
 
-// Update activity time (called on button press or touch)
+// Update activity timestamp on user interaction
 void updateActivityTime()
 {
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
+  }
+  
   lastActivityTime = millis();
+  
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
 }
 
 // Check if screensaver timeout has been reached
 void checkScreensaver()
 {
-  extern TSettings Settings;
-
-  // Don't activate if timeout is 0 (disabled)
-  if (Settings.ScreensaverTimeout == 0) {
+  // Don't activate if timeout is 0 or negative (disabled)
+  if (Settings.ScreensaverTimeout <= 0) {
     return;
+  }
+
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
   }
 
   // Don't re-activate if already active
   if (isScreensaverActive) {
+    if (screensaverMutex != NULL) {
+      xSemaphoreGive(screensaverMutex);
+    }
     return;
   }
 
   // Check if timeout exceeded
+  // Note: Unsigned arithmetic handles millis() overflow correctly
   unsigned long currentTime = millis();
   unsigned long timeoutMs = (unsigned long)Settings.ScreensaverTimeout * 60 * 1000;
-
-  // Handle millis() overflow (occurs every ~49 days)
-  if (currentTime < lastActivityTime) {
-    lastActivityTime = currentTime;
-    return;
-  }
 
   if (currentTime - lastActivityTime >= timeoutMs) {
     // Activate screensaver
@@ -197,17 +214,45 @@ void checkScreensaver()
     currentDisplayDriver->alternateScreenState();  // Turn off display
     Serial.printf("Screensaver activated after %d minutes of inactivity\n", Settings.ScreensaverTimeout);
   }
+
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
 }
 
-// Wake from screensaver
+// Getter for screensaver state (thread-safe)
+bool getScreensaverActive()
+{
+  bool active = false;
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
+  }
+  
+  active = isScreensaverActive;
+  
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
+  
+  return active;
+}
+
+// Wake from screensaver on user activity
 void wakeFromScreensaver()
 {
-  if (!isScreensaverActive) {
-    return;
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
   }
-
-  isScreensaverActive = false;
-  currentDisplayDriver->alternateScreenState();  // Turn on display
-  currentDisplayDriver->current_cyclic_screen = lastActiveScreen;  // Restore last screen
-  Serial.println("Screensaver deactivated - display restored");
+  
+  if (isScreensaverActive) {
+    isScreensaverActive = false;
+    currentDisplayDriver->alternateScreenState();  // Turn on display
+    currentDisplayDriver->current_cyclic_screen = lastActiveScreen;
+    Serial.println("Screensaver deactivated - user activity detected");
+  }
+  lastActivityTime = millis();
+  
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
 }

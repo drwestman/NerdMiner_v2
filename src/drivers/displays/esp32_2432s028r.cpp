@@ -544,10 +544,11 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
       if (pressed) {
           updateActivityTime();
 
-          // If screensaver is active, wake it
-          extern bool isScreensaverActive;
-          if (isScreensaverActive) {
+          // If screensaver is active, wake it and consume this touch event
+          if (getScreensaverActive()) {
             wakeFromScreensaver();
+            previousTouchMillis = currentMillis;
+            return;
           }
 
           if (((t_x > 109)&&(t_x < 211)) && ((t_y > 185)&&(t_y < 241))) {
