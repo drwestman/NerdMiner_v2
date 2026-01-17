@@ -1,4 +1,5 @@
 #include "displayDriver.h"
+#include "display.h"
 
 #if defined ESP32_2432S028R || ESP32_2432S028_2USB
 
@@ -540,7 +541,16 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
     { 
       int16_t t_x , t_y;  // To store the touch coordinates
       bool pressed = touch.getXY(t_x, t_y);
-      if (pressed) {                        
+      if (pressed) {
+          // If screensaver is active, wake it and consume this touch event
+          if (getScreensaverActive()) {
+            wakeFromScreensaver();
+            previousTouchMillis = currentMillis;
+            return;
+          }
+          
+          updateActivityTime();
+
           if (((t_x > 109)&&(t_x < 211)) && ((t_y > 185)&&(t_y < 241))) {
             bottomScreenBlue ^= true;
             hasChangedScreen = true;
@@ -599,12 +609,7 @@ void esp32_2432S028R_DoLedStuff(unsigned long frame)
 
 }
 
-void esp32_2432S028R_BlankScreen(unsigned long mElapsed)
-{
-  // Blank screen - do nothing, display is turned off by alternateScreenState
-}
-
-CyclicScreenFunction esp32_2432S028RCyclicScreens[] = {esp32_2432S028R_MinerScreen, esp32_2432S028R_ClockScreen, esp32_2432S028R_GlobalHashScreen, esp32_2432S028R_BTCprice, esp32_2432S028R_BlankScreen};
+CyclicScreenFunction esp32_2432S028RCyclicScreens[] = {esp32_2432S028R_MinerScreen, esp32_2432S028R_ClockScreen, esp32_2432S028R_GlobalHashScreen, esp32_2432S028R_BTCprice};
 
 DisplayDriver esp32_2432S028RDriver = {
     esp32_2432S028R_Init,

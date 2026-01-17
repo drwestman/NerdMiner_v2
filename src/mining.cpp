@@ -1244,6 +1244,9 @@ void runMonitor(void *name)
 
       drawCurrentScreen(mElapsed);
 
+      // Check screensaver timeout
+      checkScreensaver();
+
       // Monitor state when hashrate is 0.0
       if (elapsedKHs == 0)
       {

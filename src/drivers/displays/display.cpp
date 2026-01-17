@@ -1,4 +1,9 @@
 #include "display.h"
+#include <Arduino.h>
+#include "../storage/storage.h"
+
+// External settings reference
+extern TSettings Settings;
 
 #ifdef NO_DISPLAY
 DisplayDriver *currentDisplayDriver = &noDisplayDriver;
@@ -64,22 +69,48 @@ DisplayDriver *currentDisplayDriver = &t_hmiDisplayDriver;
 DisplayDriver *currentDisplayDriver = &sp_kcDisplayDriver;
 #endif
 
+// Screensaver state management
+static unsigned long lastActivityTime = 0;
+static uint8_t lastActiveScreen = 0;
+bool isScreensaverActive = false;  // Exposed via header
+static SemaphoreHandle_t screensaverMutex = NULL;
 
 // Initialize the display
 void initDisplay()
 {
+  // Create mutex for thread-safe access to screensaver state
+  if (screensaverMutex == NULL) {
+    screensaverMutex = xSemaphoreCreateMutex();
+  }
+  
   currentDisplayDriver->initDisplay();
+  lastActivityTime = millis();
+  isScreensaverActive = false;
 }
 
 // Alternate screen state
 void alternateScreenState()
 {
+  if (isScreensaverActive) {
+    wakeFromScreensaver();
+    return;
+  }
+
+  updateActivityTime();
+
   currentDisplayDriver->alternateScreenState();
 }
 
 // Alternate screen rotation
 void alternateScreenRotation()
 {
+  if (isScreensaverActive) {
+    wakeFromScreensaver();
+    return;
+  }
+
+  updateActivityTime();
+
   currentDisplayDriver->alternateScreenRotation();
 }
 
@@ -104,25 +135,16 @@ void resetToFirstScreen()
 // Switches to the next cyclic screen without drawing it
 void switchToNextScreen()
 {
-  int next_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
-  int last_screen = currentDisplayDriver->num_cyclic_screens - 1;
-
-  // If we're currently on the blank screen (last screen), turn display on and go to first screen
-  if (currentDisplayDriver->current_cyclic_screen == last_screen) {
-    currentDisplayDriver->alternateScreenState(); // Turn display back on
-    currentDisplayDriver->current_cyclic_screen = 0;
+  // If screensaver is active, wake from screensaver instead of cycling
+  if (isScreensaverActive) {
+    wakeFromScreensaver();
     return;
   }
 
-  // If we're switching to the blank screen (last screen), turn display off
-  if (next_screen == last_screen) {
-    currentDisplayDriver->current_cyclic_screen = next_screen;
-    currentDisplayDriver->alternateScreenState(); // Turn display off
-    return;
-  }
+  updateActivityTime();
 
   // Normal screen cycling
-  currentDisplayDriver->current_cyclic_screen = next_screen;
+  currentDisplayDriver->current_cyclic_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
 }
 
 // Draw the current cyclic screen
@@ -141,4 +163,94 @@ void animateCurrentScreen(unsigned long frame)
 void doLedStuff(unsigned long frame)
 {
   currentDisplayDriver->doLedStuff(frame);
+}
+
+// Update activity timestamp on user interaction
+void updateActivityTime()
+{
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
+  }
+  
+  lastActivityTime = millis();
+  
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
+}
+
+// Check if screensaver timeout has been reached
+void checkScreensaver()
+{
+  // Don't activate if timeout is 0 or negative (disabled)
+  if (Settings.ScreensaverTimeout <= 0) {
+    return;
+  }
+
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
+  }
+
+  // Don't re-activate if already active
+  if (isScreensaverActive) {
+    if (screensaverMutex != NULL) {
+      xSemaphoreGive(screensaverMutex);
+    }
+    return;
+  }
+
+  // Check if timeout exceeded
+  // Note: Unsigned arithmetic handles millis() overflow correctly
+  unsigned long currentTime = millis();
+  // Prevent integer overflow: cap timeout to max safe value (ULONG_MAX / 60000)
+  unsigned long timeoutMs = min((unsigned long)Settings.ScreensaverTimeout, ULONG_MAX / 60000UL) * 60000UL;
+
+  if (currentTime - lastActivityTime >= timeoutMs) {
+    // Activate screensaver
+    lastActiveScreen = currentDisplayDriver->current_cyclic_screen;
+    isScreensaverActive = true;
+    currentDisplayDriver->alternateScreenState();  // Turn off display
+    Serial.printf("Screensaver activated after %d minutes of inactivity\n", Settings.ScreensaverTimeout);
+  }
+
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
+}
+
+// Getter for screensaver state (thread-safe)
+bool getScreensaverActive()
+{
+  bool active = false;
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
+  }
+  
+  active = isScreensaverActive;
+  
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
+  
+  return active;
+}
+
+// Wake from screensaver on user activity
+void wakeFromScreensaver()
+{
+  if (screensaverMutex != NULL) {
+    xSemaphoreTake(screensaverMutex, portMAX_DELAY);
+  }
+  
+  if (isScreensaverActive) {
+    isScreensaverActive = false;
+    currentDisplayDriver->alternateScreenState();  // Turn on display
+    currentDisplayDriver->current_cyclic_screen = lastActiveScreen;
+    Serial.println("Screensaver deactivated - user activity detected");
+  }
+  lastActivityTime = millis();
+  
+  if (screensaverMutex != NULL) {
+    xSemaphoreGive(screensaverMutex);
+  }
 }
