@@ -11,6 +11,12 @@
 #include "drivers/storage/storage.h"
 #include "drivers/devices/device.h"
 
+// Async HTTP infrastructure
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+
 extern uint32_t templates;
 extern uint32_t hashes;
 extern uint32_t Mhashes;
@@ -37,6 +43,228 @@ global_data gData;
 pool_data pData;
 String poolAPIUrl;
 
+// ===== Async HTTP Client Infrastructure =====
+
+// Request types for async HTTP fetcher
+enum HttpRequestType {
+    HTTP_REQ_GLOBAL_DATA,
+    HTTP_REQ_BLOCK_HEIGHT,
+    HTTP_REQ_BTC_PRICE,
+    HTTP_REQ_POOL_DATA
+};
+
+// HTTP request structure
+struct HttpRequest {
+    HttpRequestType type;
+    String url;
+    unsigned long timestamp;
+};
+
+// FreeRTOS task and sync primitives
+TaskHandle_t httpFetcherTask = NULL;
+QueueHandle_t httpRequestQueue = NULL;
+SemaphoreHandle_t httpDataMutex = NULL;
+
+#define HTTP_QUEUE_SIZE 10
+#define HTTP_TASK_STACK_SIZE 8192
+#define HTTP_TASK_PRIORITY 2  // Lower than monitor task (5) but higher than miner (1)
+
+// ===== HTTP Response Processors =====
+
+void processGlobalDataResponse(const String& payload) {
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        Serial.println("Global data JSON parse error");
+        return;
+    }
+    
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    
+    String temp = "";
+    if (doc.containsKey("currentHashrate")) temp = String(doc["currentHashrate"].as<float>());
+    if(temp.length()>18 + 3) //Exahashes more than 18 digits + 3 digits decimals
+        gData.globalHash = temp.substring(0,temp.length()-18 - 3);
+    
+    if (doc.containsKey("currentDifficulty")) temp = String(doc["currentDifficulty"].as<float>());
+    if(temp.length()>10 + 3){ //Terahash more than 10 digits + 3 digit decimals
+        temp = temp.substring(0,temp.length()-10 - 3);
+        gData.difficulty = temp.substring(0,temp.length()-2) + "." + temp.substring(temp.length()-2,temp.length()) + "T";
+    }
+    
+    xSemaphoreGive(httpDataMutex);
+    doc.clear();
+}
+
+void processFeesResponse(const String& payload) {
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        Serial.println("Fees JSON parse error");
+        return;
+    }
+    
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    
+    if (doc.containsKey("halfHourFee")) gData.halfHourFee = doc["halfHourFee"].as<int>();
+#ifdef SCREEN_FEES_ENABLE
+    if (doc.containsKey("fastestFee"))  gData.fastestFee = doc["fastestFee"].as<int>();
+    if (doc.containsKey("hourFee"))     gData.hourFee = doc["hourFee"].as<int>();
+    if (doc.containsKey("economyFee"))  gData.economyFee = doc["economyFee"].as<int>();
+    if (doc.containsKey("minimumFee"))  gData.minimumFee = doc["minimumFee"].as<int>();
+#endif
+    
+    xSemaphoreGive(httpDataMutex);
+    doc.clear();
+}
+
+void processBlockHeightResponse(const String& payload) {
+    String trimmed = payload;
+    trimmed.trim();
+    
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    current_block = trimmed;
+    xSemaphoreGive(httpDataMutex);
+}
+
+void processBTCPriceResponse(const String& payload) {
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        Serial.println("BTC price JSON parse error");
+        return;
+    }
+    
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    
+    if (doc.containsKey("bitcoin") && doc["bitcoin"].containsKey("usd")) {
+        bitcoin_price = doc["bitcoin"]["usd"];
+    }
+    
+    xSemaphoreGive(httpDataMutex);
+    doc.clear();
+}
+
+void processPoolDataResponse(const String& payload) {
+    StaticJsonDocument<300> filter;
+    filter["bestDifficulty"] = true;
+    filter["workersCount"] = true;
+    filter["workers"][0]["sessionId"] = true;
+    filter["workers"][0]["hashRate"] = true;
+    
+    StaticJsonDocument<2048> doc;
+    DeserializationError error = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+    if (error) {
+        Serial.println("Pool data JSON parse error");
+        return;
+    }
+    
+    xSemaphoreTake(httpDataMutex, portMAX_DELAY);
+    
+    if (doc.containsKey("workersCount")) pData.workersCount = doc["workersCount"].as<int>();
+    
+    const JsonArray& workers = doc["workers"].as<JsonArray>();
+    float totalhashs = 0;
+    for (const JsonObject& worker : workers) {
+        totalhashs += worker["hashRate"].as<double>();
+    }
+    
+    char totalhashs_s[16] = {0};
+    suffix_string(totalhashs, totalhashs_s, 16, 0);
+    pData.workersHash = String(totalhashs_s);
+    
+    if (doc.containsKey("bestDifficulty")) {
+        double temp = doc["bestDifficulty"].as<double>();
+        char best_diff_string[16] = {0};
+        suffix_string(temp, best_diff_string, 16, 0);
+        pData.bestDifficulty = String(best_diff_string);
+    }
+    
+    xSemaphoreGive(httpDataMutex);
+    doc.clear();
+    
+    Serial.println("####### Pool Data processed (async)");
+}
+
+// ===== Async HTTP Fetcher Task =====
+
+void httpFetcherTaskHandler(void* param) {
+    HTTPClient http;
+    HttpRequest req;
+    
+    Serial.println("HTTP Fetcher Task started");
+    
+    while (1) {
+        // Wait for HTTP request from queue (blocking)
+        if (xQueueReceive(httpRequestQueue, &req, portMAX_DELAY) == pdTRUE) {
+            
+            // Check WiFi connectivity
+            if (WiFi.status() != WL_CONNECTED) {
+                Serial.println("HTTP request skipped: No WiFi");
+                continue;
+            }
+            
+            // Perform HTTP request
+            http.setTimeout(10000);
+            http.begin(req.url);
+            
+            int httpCode = http.GET();
+            
+            if (httpCode == HTTP_CODE_OK) {
+                String payload = http.getString();
+                
+                // Process response based on request type
+                switch (req.type) {
+                    case HTTP_REQ_GLOBAL_DATA:
+                        if (req.url == getGlobalHash) {
+                            processGlobalDataResponse(payload);
+                        } else if (req.url == getFees) {
+                            processFeesResponse(payload);
+                        }
+                        break;
+                        
+                    case HTTP_REQ_BLOCK_HEIGHT:
+                        processBlockHeightResponse(payload);
+                        break;
+                        
+                    case HTTP_REQ_BTC_PRICE:
+                        processBTCPriceResponse(payload);
+                        break;
+                        
+                    case HTTP_REQ_POOL_DATA:
+                        processPoolDataResponse(payload);
+                        break;
+                }
+                
+            } else {
+                Serial.printf("HTTP request failed: %d (type: %d)\n", httpCode, req.type);
+            }
+            
+            http.end();
+            
+            // Small delay to prevent overwhelming network
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
+// ===== Helper function to queue HTTP requests =====
+
+bool queueHttpRequest(HttpRequestType type, const String& url) {
+    HttpRequest req;
+    req.type = type;
+    req.url = url;
+    req.timestamp = millis();
+    
+    // Try to send to queue (non-blocking with 0 timeout)
+    if (xQueueSend(httpRequestQueue, &req, 0) == pdTRUE) {
+        return true;
+    } else {
+        Serial.println("HTTP queue full, request dropped");
+        return false;
+    }
+}
+
 
 void setup_monitor(void){
     /******** TIME ZONE SETTING *****/
@@ -52,6 +280,40 @@ void setup_monitor(void){
     poolAPIUrl = getPoolAPIUrl();
     Serial.println("poolAPIUrl: " + poolAPIUrl);
 #endif
+
+    // ===== Initialize Async HTTP Infrastructure =====
+    
+    // Create mutex for thread-safe data access
+    httpDataMutex = xSemaphoreCreateMutex();
+    if (httpDataMutex == NULL) {
+        Serial.println("ERROR: Failed to create HTTP data mutex");
+        return;
+    }
+    
+    // Create queue for HTTP requests
+    httpRequestQueue = xQueueCreate(HTTP_QUEUE_SIZE, sizeof(HttpRequest));
+    if (httpRequestQueue == NULL) {
+        Serial.println("ERROR: Failed to create HTTP request queue");
+        return;
+    }
+    
+    // Create HTTP fetcher task on Core 1 (same as monitor)
+    BaseType_t taskCreated = xTaskCreatePinnedToCore(
+        httpFetcherTaskHandler,     // Task function
+        "HttpFetcher",               // Task name
+        HTTP_TASK_STACK_SIZE,        // Stack size (8KB)
+        NULL,                        // Parameters
+        HTTP_TASK_PRIORITY,          // Priority (2)
+        &httpFetcherTask,            // Task handle
+        1                            // Core 1 (same as monitor task)
+    );
+    
+    if (taskCreated != pdPASS) {
+        Serial.println("ERROR: Failed to create HTTP fetcher task");
+        return;
+    }
+    
+    Serial.println("Async HTTP infrastructure initialized successfully");
 }
 
 unsigned long mGlobalUpdate =0;
@@ -61,62 +323,12 @@ void updateGlobalData(void){
     if((mGlobalUpdate == 0) || (millis() - mGlobalUpdate > UPDATE_Global_min * 60 * 1000)){
     
         if (WiFi.status() != WL_CONNECTED) return;
-            
-        //Make first API call to get global hash and current difficulty
-        HTTPClient http;
-        http.setTimeout(10000);
-        try {
-        http.begin(getGlobalHash);
-        int httpCode = http.GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            String payload = http.getString();
-            
-            StaticJsonDocument<1024> doc;
-            deserializeJson(doc, payload);
-            String temp = "";
-            if (doc.containsKey("currentHashrate")) temp = String(doc["currentHashrate"].as<float>());
-            if(temp.length()>18 + 3) //Exahashes more than 18 digits + 3 digits decimals
-              gData.globalHash = temp.substring(0,temp.length()-18 - 3);
-            if (doc.containsKey("currentDifficulty")) temp = String(doc["currentDifficulty"].as<float>());
-            if(temp.length()>10 + 3){ //Terahash more than 10 digits + 3 digit decimals
-              temp = temp.substring(0,temp.length()-10 - 3);
-              gData.difficulty = temp.substring(0,temp.length()-2) + "." + temp.substring(temp.length()-2,temp.length()) + "T";
-            }
-            doc.clear();
-
-            mGlobalUpdate = millis();
-        }
-        http.end();
-
-      
-        //Make third API call to get fees
-        http.begin(getFees);
-        httpCode = http.GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            String payload = http.getString();
-            
-            StaticJsonDocument<1024> doc;
-            deserializeJson(doc, payload);
-            String temp = "";
-            if (doc.containsKey("halfHourFee")) gData.halfHourFee = doc["halfHourFee"].as<int>();
-#ifdef SCREEN_FEES_ENABLE
-            if (doc.containsKey("fastestFee"))  gData.fastestFee = doc["fastestFee"].as<int>();
-            if (doc.containsKey("hourFee"))     gData.hourFee = doc["hourFee"].as<int>();
-            if (doc.containsKey("economyFee"))  gData.economyFee = doc["economyFee"].as<int>();
-            if (doc.containsKey("minimumFee"))  gData.minimumFee = doc["minimumFee"].as<int>();
-#endif
-            doc.clear();
-
-            mGlobalUpdate = millis();
-        }
         
-        http.end();
-        } catch(...) {
-          Serial.println("Global data HTTP error caught");
-          http.end();
-        }
+        // Queue async HTTP requests for global data
+        queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getGlobalHash);
+        queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getFees);
+        
+        mGlobalUpdate = millis();
     }
 }
 
@@ -127,29 +339,15 @@ String getBlockHeight(void){
     if((mHeightUpdate == 0) || (millis() - mHeightUpdate > UPDATE_Height_min * 60 * 1000)){
     
         if (WiFi.status() != WL_CONNECTED) return current_block;
-            
-        HTTPClient http;
-        http.setTimeout(10000);
-        try {
-        http.begin(getHeightAPI);
-        int httpCode = http.GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            String payload = http.getString();
-            payload.trim();
-
-            current_block = payload;
-
-            mHeightUpdate = millis();
-        }        
-        http.end();
-        } catch(...) {
-          Serial.println("Height HTTP error caught");
-          http.end();
-        }
+        
+        // Queue async HTTP request for block height
+        queueHttpRequest(HTTP_REQ_BLOCK_HEIGHT, getHeightAPI);
+        
+        mHeightUpdate = millis();
     }
   
-  return current_block;
+    // Return current cached value (will be updated asynchronously)
+    return current_block;
 }
 
 unsigned long mBTCUpdate = 0;
@@ -164,39 +362,16 @@ String getBTCprice(void){
             return String(price_buffer);
         }
         
-        HTTPClient http;
-        http.setTimeout(10000);
-        bool priceUpdated = false;
-
-        try {
-        http.begin(getBTCAPI);
-        int httpCode = http.GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            String payload = http.getString();
-
-            StaticJsonDocument<1024> doc;
-            deserializeJson(doc, payload);
-          
-            if (doc.containsKey("bitcoin") && doc["bitcoin"].containsKey("usd")) {
-                bitcoin_price = doc["bitcoin"]["usd"];
-            }
-
-            doc.clear();
-
-            mBTCUpdate = millis();
-        }
+        // Queue async HTTP request for BTC price
+        queueHttpRequest(HTTP_REQ_BTC_PRICE, getBTCAPI);
         
-        http.end();
-        } catch(...) {
-          Serial.println("BTC price HTTP error caught");
-          http.end();
-        }
+        mBTCUpdate = millis();
     }  
   
-  static char price_buffer[16];
-  snprintf(price_buffer, sizeof(price_buffer), "$%u", bitcoin_price);
-  return String(price_buffer);
+    // Return current cached value (will be updated asynchronously)
+    static char price_buffer[16];
+    snprintf(price_buffer, sizeof(price_buffer), "$%u", bitcoin_price);
+    return String(price_buffer);
 }
 
 unsigned long mTriggerUpdate = 0;
@@ -439,77 +614,26 @@ String getPoolAPIUrl(void) {
 pool_data getPoolData(void){
     //pool_data pData;    
     if((mPoolUpdate == 0) || (millis() - mPoolUpdate > UPDATE_POOL_min * 60 * 1000)){      
-        if (WiFi.status() != WL_CONNECTED) return pData;            
-        //Make first API call to get global hash and current difficulty
-        HTTPClient http;
-        http.setTimeout(10000);        
-        try {          
-          String btcWallet = Settings.BtcWallet;
-          // Serial.println(btcWallet);
-          if (btcWallet.indexOf(".")>0) btcWallet = btcWallet.substring(0,btcWallet.indexOf("."));
+        if (WiFi.status() != WL_CONNECTED) return pData;
+        
+        // Construct pool API URL with wallet address
+        String btcWallet = Settings.BtcWallet;
+        if (btcWallet.indexOf(".")>0) btcWallet = btcWallet.substring(0,btcWallet.indexOf("."));
+        
+        String poolUrl;
 #ifdef SCREEN_WORKERS_ENABLE
-          Serial.println("Pool API : " + poolAPIUrl+btcWallet);
-          http.begin(poolAPIUrl+btcWallet);
+        poolUrl = poolAPIUrl + btcWallet;
+        Serial.println("Pool API : " + poolUrl);
 #else
-          http.begin(String(getPublicPool)+btcWallet);
+        poolUrl = String(getPublicPool) + btcWallet;
 #endif
-          int httpCode = http.GET();
-          if (httpCode == HTTP_CODE_OK) {
-              String payload = http.getString();
-              // Serial.println(payload);
-              StaticJsonDocument<300> filter;
-              filter["bestDifficulty"] = true;
-              filter["workersCount"] = true;
-              filter["workers"][0]["sessionId"] = true;
-              filter["workers"][0]["hashRate"] = true;
-              StaticJsonDocument<2048> doc;
-              deserializeJson(doc, payload, DeserializationOption::Filter(filter));
-              //Serial.println(serializeJsonPretty(doc, Serial));
-              if (doc.containsKey("workersCount")) pData.workersCount = doc["workersCount"].as<int>();
-              const JsonArray& workers = doc["workers"].as<JsonArray>();
-              float totalhashs = 0;
-              for (const JsonObject& worker : workers) {
-                totalhashs += worker["hashRate"].as<double>();
-                /* Serial.print(worker["sessionId"].as<String>()+": ");
-                Serial.print(" - "+worker["hashRate"].as<String>()+": ");
-                Serial.println(totalhashs); */
-              }
-              char totalhashs_s[16] = {0};
-              suffix_string(totalhashs, totalhashs_s, 16, 0);
-              pData.workersHash = String(totalhashs_s);
-
-              double temp;
-              if (doc.containsKey("bestDifficulty")) {
-              temp = doc["bestDifficulty"].as<double>();            
-              char best_diff_string[16] = {0};
-              suffix_string(temp, best_diff_string, 16, 0);
-              pData.bestDifficulty = String(best_diff_string);
-              }
-              doc.clear();
-              mPoolUpdate = millis();
-              Serial.println("\n####### Pool Data OK!");               
-          } else {
-              Serial.println("\n####### Pool Data HTTP Error!");    
-              /* Serial.println(httpCode);
-              String payload = http.getString();
-              Serial.println(payload); */
-              // mPoolUpdate = millis();
-              pData.bestDifficulty = "P";
-              pData.workersHash = "E";
-              pData.workersCount = 0;
-              http.end();
-              return pData; 
-          }
-          http.end();
-        } catch(...) {
-          Serial.println("####### Pool Error!");          
-          // mPoolUpdate = millis();
-          pData.bestDifficulty = "P";
-          pData.workersHash = "Error";
-          pData.workersCount = 0;
-          http.end();
-          return pData;
-        } 
+        
+        // Queue async HTTP request for pool data
+        queueHttpRequest(HTTP_REQ_POOL_DATA, poolUrl);
+        
+        mPoolUpdate = millis();
     }
+    
+    // Return current cached value (will be updated asynchronously)
     return pData;
 }
