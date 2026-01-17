@@ -109,6 +109,11 @@ bool nvMemory::loadConfig(TSettings* Settings)
                     } else {
                         Settings->Brightness = 250;
                     }
+                    if (json.containsKey(JSON_SPIFFS_KEY_SCREENSAVER_TIMEOUT)) {
+                        Settings->ScreensaverTimeout = json[JSON_SPIFFS_KEY_SCREENSAVER_TIMEOUT].as<int>();
+                    } else {
+                        Settings->ScreensaverTimeout = DEFAULT_SCREENSAVER_TIMEOUT;
+                    }
                     return true;
                 }
                 else

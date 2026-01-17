@@ -26,6 +26,7 @@ Currently includes:
 - NerdMiner Screen > Mining data of Nerdminer
 - ClockMiner Screen > Fashion style clock miner
 - GlobalStats Screen > Global minery stats and relevant data
+- Automatic Screensaver > Display blanks after configurable timeout to save power (default: 15 minutes)
 
 This miner is multicore and multithreads, both cores are used to mine and several threads are used to implementing stratum work and wifi stuff.
 Every time an stratum job notification is received miner update its current work to not create stale shares.
@@ -121,19 +122,23 @@ Note: when BTC address of your selected wallet is not provided, mining will not 
 #### SD card (if available)
 
 1. Format a SD card using Fat32.
-1. Create a file named "config.json" in your card's root, containing the the following structure. Adjust the settings to your needs:  
+1. Create a file named "config.json" in your card's root, containing the the following structure. Adjust the settings to your needs:
 ```
-{  
-  "SSID": "myWifiSSID",  
-  "WifiPW": "myWifiPassword",  
-  "PoolUrl": "public-pool.io",  
+{
+  "SSID": "myWifiSSID",
+  "WifiPW": "myWifiPassword",
+  "PoolUrl": "public-pool.io",
   "PoolPort": 21496,
   "PoolPassword": "x",
-  "BtcWallet": "walletID",  
-  "Timezone": 2,  
-  "SaveStats": false  
+  "BtcWallet": "walletID",
+  "Timezone": 2,
+  "SaveStats": false,
+  "ScreensaverTimeout": 15
 }
 ```
+
+**Configuration options:**
+- `ScreensaverTimeout`: Minutes of inactivity before display blanks (default: 15, set to 0 to disable)
 
 1. Insert the SD card.
 1. Hold down the "reset configurations" button as described below to reset the configurations and/or boot without settings in your nvmemory.
@@ -161,7 +166,29 @@ Other standard pools not compatible with low difficulty share:
 | btc.zsolo.bid            | 6057 | https://zsolo.bid/en/btc-solo-mining-pool |
 | eu.stratum.slushpool.com | 3333 | https://braiins.com/pool                  |
 
+### Automatic Screensaver
+
+NerdMiner includes an automatic screensaver feature that blanks the display after a configurable period of inactivity to save power and extend display lifespan.
+
+**Features:**
+- Automatically blanks display after timeout (default: 15 minutes)
+- Any button press or touch wakes the display
+- Returns to the last active screen (remembers your screen before screensaver activated)
+- Configurable via `ScreensaverTimeout` in config.json
+- Can be disabled by setting `ScreensaverTimeout` to 0
+
+**Configuration:**
+Add to your config.json:
+```json
+"ScreensaverTimeout": 15
+```
+- Value in minutes (15 = 15 minutes of inactivity)
+- Set to 0 to disable screensaver
+- If not specified, defaults to 15 minutes
+
 ### Buttons
+
+**Note:** Any button press or touch will wake the display from automatic screensaver and return to the last active screen.
 
 #### One button devices:
 

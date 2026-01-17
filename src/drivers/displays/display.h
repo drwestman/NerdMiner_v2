@@ -15,5 +15,8 @@ void drawSetupScreen();
 void drawCurrentScreen(unsigned long mElapsed);
 void animateCurrentScreen(unsigned long frame);
 void doLedStuff(unsigned long frame);
+void updateActivityTime();
+void checkScreensaver();
+void wakeFromScreensaver();
 
 #endif // DISPLAY_H

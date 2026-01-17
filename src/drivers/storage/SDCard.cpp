@@ -133,6 +133,11 @@ bool SDCard::loadConfigFile(TSettings* Settings)
                     } else {
                         Settings->Brightness = 250;
                     }
+                    if (json.containsKey(JSON_KEY_SCREENSAVER_TIMEOUT)) {
+                        Settings->ScreensaverTimeout = json[JSON_KEY_SCREENSAVER_TIMEOUT].as<int>();
+                    } else {
+                        Settings->ScreensaverTimeout = DEFAULT_SCREENSAVER_TIMEOUT;
+                    }
                     // Serial.printf("Carteira Lida SD:%s\n", Settings.BtcWallet);       
                     Serial.printf("Carteira Lida SDs:%s\n", Settings->BtcWallet);                       
                     return true;
