@@ -12,6 +12,7 @@ void initDisplay();
 void alternateScreenState();
 void alternateScreenRotation();
 void switchToNextScreen();
+void switchToPreviousScreen();
 void resetToFirstScreen();
 void drawLoadingScreen();
 void drawSetupScreen();
