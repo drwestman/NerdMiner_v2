@@ -56,7 +56,8 @@ unsigned long initialTime = 0;
 
 // Request types for async HTTP fetcher
 enum HttpRequestType {
-    HTTP_REQ_GLOBAL_DATA,
+    HTTP_REQ_GLOBAL_HASHRATE,  // Global hashrate and difficulty
+    HTTP_REQ_FEES,              // Network fees
     HTTP_REQ_BLOCK_HEIGHT,
     HTTP_REQ_BTC_PRICE,
     HTTP_REQ_POOL_DATA
@@ -65,10 +66,12 @@ enum HttpRequestType {
 // HTTP request structure
 // NOTE: Using char array instead of String for FreeRTOS queue compatibility
 // String objects contain pointers that become invalid after queueing
+#define HTTP_URL_MAX_LEN 512
+
 struct HttpRequest {
     HttpRequestType type;
-    char url[256];  // Fixed-size buffer for URL
-    unsigned long timestamp;
+    char url[HTTP_URL_MAX_LEN];  // Fixed-size buffer for URL (512 bytes for long pool URLs)
+    unsigned long timestamp;     // Timestamp when request was queued (reserved for future use)
 };
 
 // FreeRTOS task and sync primitives
@@ -83,6 +86,12 @@ SemaphoreHandle_t httpDataMutex = NULL;
 // ===== HTTP Response Processors =====
 
 void processGlobalDataResponse(const String& payload) {
+    // Check if mutex was initialized (Issue #6: NULL check)
+    if (httpDataMutex == NULL) {
+        Serial.println("ERROR: HTTP data mutex not initialized");
+        return;
+    }
+    
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
@@ -114,6 +123,12 @@ void processGlobalDataResponse(const String& payload) {
 }
 
 void processFeesResponse(const String& payload) {
+    // Check if mutex was initialized (Issue #6: NULL check)
+    if (httpDataMutex == NULL) {
+        Serial.println("ERROR: HTTP data mutex not initialized");
+        return;
+    }
+    
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
@@ -136,6 +151,12 @@ void processFeesResponse(const String& payload) {
 }
 
 void processBlockHeightResponse(const String& payload) {
+    // Check if mutex was initialized (Issue #6: NULL check)
+    if (httpDataMutex == NULL) {
+        Serial.println("ERROR: HTTP data mutex not initialized");
+        return;
+    }
+    
     String trimmed = payload;
     trimmed.trim();
     
@@ -145,6 +166,12 @@ void processBlockHeightResponse(const String& payload) {
 }
 
 void processBTCPriceResponse(const String& payload) {
+    // Check if mutex was initialized (Issue #6: NULL check)
+    if (httpDataMutex == NULL) {
+        Serial.println("ERROR: HTTP data mutex not initialized");
+        return;
+    }
+    
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
@@ -163,6 +190,12 @@ void processBTCPriceResponse(const String& payload) {
 }
 
 void processPoolDataResponse(const String& payload) {
+    // Check if mutex was initialized (Issue #6: NULL check)
+    if (httpDataMutex == NULL) {
+        Serial.println("ERROR: HTTP data mutex not initialized");
+        return;
+    }
+    
     StaticJsonDocument<300> filter;
     filter["bestDifficulty"] = true;
     filter["workersCount"] = true;
@@ -255,12 +288,12 @@ void httpFetcherTaskHandler(void* param) {
                 
                 // Process response based on request type
                 switch (req.type) {
-                    case HTTP_REQ_GLOBAL_DATA:
-                        if (strcmp(req.url, getGlobalHash) == 0) {
-                            processGlobalDataResponse(payload);
-                        } else if (strcmp(req.url, getFees) == 0) {
-                            processFeesResponse(payload);
-                        }
+                    case HTTP_REQ_GLOBAL_HASHRATE:
+                        processGlobalDataResponse(payload);
+                        break;
+                        
+                    case HTTP_REQ_FEES:
+                        processFeesResponse(payload);
                         break;
                         
                     case HTTP_REQ_BLOCK_HEIGHT:
@@ -281,7 +314,7 @@ void httpFetcherTaskHandler(void* param) {
                 Serial.printf("HTTP request failed: %d (type: %d)\n", httpCode, req.type);
                 
                 // Handle pool data errors specifically
-                if (req.type == HTTP_REQ_POOL_DATA) {
+                if (req.type == HTTP_REQ_POOL_DATA && httpDataMutex != NULL) {
                     xSemaphoreTake(httpDataMutex, portMAX_DELAY);
                     pData.bestDifficulty = "HTTP Err";
                     pData.workersHash = "E";
@@ -301,6 +334,19 @@ void httpFetcherTaskHandler(void* param) {
 // ===== Helper function to queue HTTP requests =====
 
 bool queueHttpRequest(HttpRequestType type, const String& url) {
+    // Check if queue was initialized (Issue #6: NULL check)
+    if (httpRequestQueue == NULL) {
+        Serial.println("ERROR: HTTP queue not initialized");
+        return false;
+    }
+    
+    // Validate URL length (Issue #5: Buffer overflow protection)
+    if (url.length() >= HTTP_URL_MAX_LEN) {
+        Serial.printf("ERROR: URL too long (%d bytes, max %d): %s\n", 
+                      url.length(), HTTP_URL_MAX_LEN - 1, url.c_str());
+        return false;
+    }
+    
     HttpRequest req;
     req.type = type;
     
@@ -378,8 +424,8 @@ void updateGlobalData(void){
         if (WiFi.status() != WL_CONNECTED) return;
         
         // Queue async HTTP requests for global data
-        bool queued1 = queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getGlobalHash);
-        bool queued2 = queueHttpRequest(HTTP_REQ_GLOBAL_DATA, getFees);
+        bool queued1 = queueHttpRequest(HTTP_REQ_GLOBAL_HASHRATE, getGlobalHash);
+        bool queued2 = queueHttpRequest(HTTP_REQ_FEES, getFees);
         
         // Update timer if at least one request was successfully queued
         // This prevents retry storm when queue is full
