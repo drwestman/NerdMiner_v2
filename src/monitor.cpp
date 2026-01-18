@@ -77,7 +77,7 @@ QueueHandle_t httpRequestQueue = NULL;
 SemaphoreHandle_t httpDataMutex = NULL;
 
 #define HTTP_QUEUE_SIZE 10
-#define HTTP_TASK_STACK_SIZE 8192
+#define HTTP_TASK_STACK_SIZE 16384  // 16KB required for SSL/TLS operations
 #define HTTP_TASK_PRIORITY 2  // Lower than monitor task (5) but higher than miner (1)
 
 // ===== HTTP Response Processors =====
@@ -355,7 +355,7 @@ void setup_monitor(void){
     BaseType_t taskCreated = xTaskCreatePinnedToCore(
         httpFetcherTaskHandler,     // Task function
         "HttpFetcher",               // Task name
-        HTTP_TASK_STACK_SIZE,        // Stack size (8KB)
+        HTTP_TASK_STACK_SIZE,        // Stack size (16KB)
         NULL,                        // Parameters
         HTTP_TASK_PRIORITY,          // Priority (2)
         &httpFetcherTask,            // Task handle
