@@ -92,7 +92,8 @@ void processGlobalDataResponse(const String& payload) {
         return;
     }
     
-    StaticJsonDocument<1024> doc;
+    // Use DynamicJsonDocument (heap) instead of stack to reduce stack pressure (Issue #8)
+    DynamicJsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
         Serial.println("Global data JSON parse error");
@@ -129,7 +130,8 @@ void processFeesResponse(const String& payload) {
         return;
     }
     
-    StaticJsonDocument<1024> doc;
+    // Use DynamicJsonDocument (heap) instead of stack to reduce stack pressure (Issue #8)
+    DynamicJsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
         Serial.println("Fees JSON parse error");
@@ -172,7 +174,8 @@ void processBTCPriceResponse(const String& payload) {
         return;
     }
     
-    StaticJsonDocument<1024> doc;
+    // Use DynamicJsonDocument (heap) instead of stack to reduce stack pressure (Issue #8)
+    DynamicJsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
         Serial.println("BTC price JSON parse error");
@@ -202,7 +205,8 @@ void processPoolDataResponse(const String& payload) {
     filter["workers"][0]["sessionId"] = true;
     filter["workers"][0]["hashRate"] = true;
     
-    StaticJsonDocument<2048> doc;
+    // Use DynamicJsonDocument (heap) for large docs to reduce stack pressure (Issue #8)
+    DynamicJsonDocument doc(2048);
     DeserializationError error = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
     if (error) {
         Serial.println("Pool data JSON parse error: " + String(error.c_str()));
@@ -262,10 +266,18 @@ void httpFetcherTaskHandler(void* param) {
     
     Serial.println("HTTP Fetcher Task started");
     
+    // Monitor initial stack usage (Issue #7: Stack monitoring)
+    UBaseType_t highWaterMark = uxTaskGetStackHighWaterMark(NULL);
+    Serial.printf("HTTP task initial stack high water mark: %u words (%u bytes free)\n", 
+                  highWaterMark, highWaterMark * 4);
+    
+    int requestCount = 0;
+    
     while (1) {
         // Wait for HTTP request from queue (blocking)
         if (xQueueReceive(httpRequestQueue, &req, portMAX_DELAY) == pdTRUE) {
             
+            requestCount++;
             Serial.println("Processing HTTP request type: " + String(req.type) + " URL: " + String(req.url));
             
             // Check WiFi connectivity
@@ -283,7 +295,41 @@ void httpFetcherTaskHandler(void* param) {
             Serial.println("HTTP response code: " + String(httpCode));
             
             if (httpCode == HTTP_CODE_OK) {
-                String payload = http.getString();
+                // Heap monitoring before payload allocation (Issue #9)
+                size_t freeHeapBefore = ESP.getFreeHeap();
+                int contentLength = http.getSize(); // -1 if unknown
+                
+                Serial.printf("Free heap before payload: %u bytes, content length: %d\n", 
+                              freeHeapBefore, contentLength);
+                
+                // Check if enough heap available (safety margin: 20KB)
+                if (contentLength > 0 && freeHeapBefore < (size_t)contentLength + 20000) {
+                    Serial.println("ERROR: Insufficient heap for HTTP payload");
+                    http.end();
+                    continue;
+                }
+                
+                String payload;
+                // Reserve space if size is known (optimization)
+                if (contentLength > 0 && contentLength < 128 * 1024) {
+                    payload.reserve(contentLength + 1);
+                }
+                
+                payload = http.getString();
+                
+                // Heap monitoring after payload allocation (Issue #9)
+                size_t freeHeapAfter = ESP.getFreeHeap();
+                Serial.printf("Payload received, length: %u, heap after: %u (delta: %d bytes)\n", 
+                              payload.length(), freeHeapAfter, 
+                              (int)(freeHeapBefore - freeHeapAfter));
+                
+                // Check for allocation failure
+                if (contentLength > 0 && payload.length() == 0) {
+                    Serial.println("ERROR: HTTP payload allocation failed");
+                    http.end();
+                    continue;
+                }
+                
                 Serial.println("Payload received, length: " + String(payload.length()));
                 
                 // Process response based on request type
@@ -324,6 +370,13 @@ void httpFetcherTaskHandler(void* param) {
             }
             
             http.end();
+            
+            // Monitor stack usage every 10 requests (Issue #7: Stack monitoring)
+            if (requestCount % 10 == 0) {
+                highWaterMark = uxTaskGetStackHighWaterMark(NULL);
+                Serial.printf("HTTP task stack high water mark: %u words (%u bytes free)\n", 
+                              highWaterMark, highWaterMark * 4);
+            }
             
             // Small delay to prevent overwhelming network
             vTaskDelay(100 / portTICK_PERIOD_MS);
